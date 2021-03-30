@@ -1,0 +1,34 @@
+CC:=/usr/sw/swgcc/swgcc710-tools-SEA-1149/usr/bin/swg++
+
+TFPREFIX:=/home/export/online1/mdt00/shisuan/swustc/limingfan/beijing-107/tf_cpp/tf_root
+
+MPIPREFIX:=/usr/sw/swpython/mpi_libs
+
+INC_DIR:=-I$(TFPREFIX)/include -I/usr/sw/mpi/mpi_current/include
+
+LINK_DIR:=-L$(TFPREFIX)/lib -L$(MPIPREFIX)
+
+LINK_FLAGS:=-shared -mhybrid -mdynamic
+
+CC_FLAGS:=-std=c++11 -g -w -fPIC
+
+LINK_LIB:=-lmpicxx -lmpi -ltensorflow_framework -Wl,-rpath=$(MPIPREFIX):$(TFPREFIX)/lib
+
+tf_mpi_ops.so: mpi_ops.o mpi_ops_gather.o mpi_ops_allgather.o mpi_ops_allreduce.o mpi_ops_bcast.o $(TFPREFIX)/lib/libtensorflow_framework.so
+	$(CC) $(LINK_FLAGS) $(LINK_DIR) $(LINK_LIB) $^ -o $@
+mpi_ops_bcast.o: mpi_ops_bcast.cc
+	$(CC) $(CC_FLAGS) $(INC_DIR) -c $^ -o $@
+mpi_ops_allreduce.o: mpi_ops_allreduce.cc
+	$(CC) $(CC_FLAGS) $(INC_DIR) -c $^ -o $@
+mpi_ops_allgather.o: mpi_ops_allgather.cc
+	$(CC) $(CC_FLAGS) $(INC_DIR) -c $^ -o $@
+mpi_ops_gather.o: mpi_ops_gather.cc
+	$(CC) $(CC_FLAGS) $(INC_DIR) -c $^ -o $@
+mpi_ops.o: mpi_ops.cc
+	$(CC) $(CC_FLAGS) $(INC_DIR) -c $^ -o $@
+
+all:
+	tf_mpi_ops.so
+clean:
+	rm -rf *.o *.so
+

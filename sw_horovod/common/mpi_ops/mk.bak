@@ -1,0 +1,25 @@
+CC:=/usr/sw/swgcc/swgcc710-tools-SEA-1149/usr/bin/swg++
+
+MPIPREFIX:=/usr/sw/swpython/mpi_libs
+
+INC_DIR:=-I/usr/sw/mpi/mpi_current/include
+
+LINK_DIR:=-L$(MPIPREFIX)
+
+LINK_FLAGS:=-shared -mhybrid -mdynamic
+
+CC_FLAGS:=-std=c++11 -g -w -fPIC
+
+LINK_LIB:=-lmpicxx -lmpi -Wl,-rpath=$(MPIPREFIX)
+
+mpi_libs.so: mpi_libs.o 
+	$(CC) $(LINK_FLAGS) $(LINK_DIR) $(LINK_LIB) $^ -o $@
+
+mpi_libs.o: mpi_libs.cc
+	$(CC) $(CC_FLAGS) $(INC_DIR) -c $^ -o $@
+
+all:
+	mpi_libs.so
+clean:
+	rm -rf *.o *.so
+

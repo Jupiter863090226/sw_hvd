@@ -1,0 +1,180 @@
+#include "mpi_ops.h"
+//#include <stdio.h>
+
+using namespace tensorflow;
+
+REGISTER_OP("TfAllreduces")
+	.Attr("T: {uint8, int8, uint16, int16, int32, int64, float32, float64}")
+	.Input("values: N * T")
+	.Output("output: N * T")
+	.Attr("precision: int")
+	.Attr("N: int >= 1")
+	.SetShapeFn(
+		[](::tensorflow::shape_inference::InferenceContext *c) {
+			int start_value_index = 0;
+			int end_value_index = c->num_inputs();
+			int num_outputs = c->num_outputs();
+			int num_inputs = c->num_inputs();
+			if (num_outputs != num_inputs)
+			{
+				return errors::InvalidArgument("Tensor length of output should be equal to input");
+			}
+			for (int i = start_value_index; i < end_value_index; ++i)
+			{
+				c->set_output(i, c->input(i));
+			}
+			return Status::OK();
+		});
+
+class TfAllreducesOp : public OpKernel
+{
+public:
+	explicit TfAllreducesOp(OpKernelConstruction *context) : OpKernel(context)
+	{
+		OP_REQUIRES_OK(context, InputRange("values", &values_input_start_index_, &values_input_end_index_));
+		OP_REQUIRES_OK(context, context->GetAttr("precision", &precision_));
+		//printf("start build OP\n");
+	}
+	void Compute(OpKernelContext *context) override
+	{
+
+		//printf("start compute OP\n");
+		if (1)
+		{
+
+			int buf_size = 0;
+			for (int i = values_input_start_index_; i < values_input_end_index_; ++i)
+				buf_size += context->input(i).NumElements();
+
+			DataType prec_type;
+			if (precision_ == 0) //precision_: precision used for data buffer and MPI_OP (0 for float and 1 for double)
+				prec_type = tensorflow::DT_FLOAT;
+			else 
+				prec_type = tensorflow::DT_DOUBLE;
+
+			Tensor buf_tensor;
+			OP_REQUIRES_OK(context, context->allocate_temp(prec_type, TensorShape({buf_size}), &buf_tensor));
+			auto buf_ptr = (precision_ == 0) ? buf_tensor.flat<float>().data() : buf_tensor.flat<double>().data();
+			//std::string buf_type = "";
+			//if (prec_type == tensorflow::DT_FLOAT)
+			//	buf_type += "float";
+			//else
+			//	buf_type += "double";
+			//auto buf_ptr = buf_tensor.flat<buf_type>().data();
+
+			int buf_len = 0;
+			for (int i = values_input_start_index_; i < values_input_end_index_; ++i)
+			{
+				Tensor input_tensor = context->input(i);
+
+				if (input_tensor.dtype() == tensorflow::DT_FLOAT)
+				{
+					auto input_len = input_tensor.flat<float>().size();
+					assert(input_len == input_tensor.NumElements());
+					auto input_ptr = input_tensor.flat<float>().data();
+					for (int ii = 0; ii < input_len; ii++)
+						buf_ptr[buf_len + ii] = input_ptr[ii];
+
+					buf_len += input_len;
+				}
+				else if (input_tensor.dtype() == tensorflow::DT_DOUBLE)
+				{
+					auto input_len = input_tensor.flat<double>().size();
+					assert(input_len == input_tensor.NumElements());
+					auto input_ptr = input_tensor.flat<double>().data();
+					if (prec_type == tensorflow::DT_FLOAT)
+						for (int ii = 0; ii < input_len; ii++)
+							buf_ptr[buf_len + ii] = (float) input_ptr[ii];
+					else
+						for (int ii = 0; ii < input_len; ii++)
+							buf_ptr[buf_len + ii] = input_ptr[ii];
+					buf_len += input_len;
+				}
+				else
+				{
+					std::cout << "Error for type " << input_tensor.dtype() << " of Tensor: " << input_tensor.DebugString() << std::endl;
+				}
+			}
+			assert(buf_len == buf_size);
+
+			MPI_Datatype datatype = GetMPIDataType(buf_tensor);
+			MPI_Allreduce(
+				MPI_IN_PLACE,
+				(void *)buf_ptr, //buf_tensor.tensor_data().data(),
+				(int)buf_len,	 //buf_tensor.NumElements(),
+				datatype,
+				MPI_SUM,
+				MPI_COMM_WORLD);
+
+			buf_len = 0;
+			for (int i = values_input_start_index_; i < values_input_end_index_; ++i)
+			{
+				Tensor input_tensor = context->input(i);
+
+				if (input_tensor.dtype() == tensorflow::DT_FLOAT)
+				{
+					auto input_len = input_tensor.flat<float>().size();
+					assert(input_len == input_tensor.NumElements());
+					auto input_ptr = input_tensor.flat<float>().data();
+					if (prec_type == tensorflow::DT_FLOAT)
+						for (int ii = 0; ii < input_len; ii++)
+							input_ptr[ii] =  buf_ptr[buf_len + ii];
+					else
+						for (int ii = 0; ii < input_len; ii++)
+							input_ptr[ii] = (float) buf_ptr[buf_len + ii];
+					buf_len += input_len;
+				}
+				else if (input_tensor.dtype() == tensorflow::DT_DOUBLE)
+				{
+					auto input_len = input_tensor.flat<double>().size();
+					assert(input_len == input_tensor.NumElements());
+					auto input_ptr = input_tensor.flat<double>().data();
+					for (int ii = 0; ii < input_len; ii++)
+						input_ptr[ii] = buf_ptr[buf_len + ii];
+
+					buf_len += input_len;
+				}
+				else
+				{
+					std::cout << "Error for type " << input_tensor.dtype() << " of Tensor: " << input_tensor.DebugString() << std::endl;
+				}
+			}
+			assert(buf_len == buf_size);
+
+			for (int i = values_input_start_index_; i < values_input_end_index_; ++i)
+			{
+				Tensor input_tensor = context->input(i);
+				context->set_output(i, input_tensor);
+			}
+		}
+		else
+		{
+			// Grab the input tensor
+			for (int i = values_input_start_index_; i < values_input_end_index_; ++i)
+			{
+				Tensor input_tensor = context->input(i);
+				//context->forward_ref_input_to_ref_output(0, 0);
+
+				MPI_Datatype datatype = GetMPIDataType(input_tensor);
+
+				MPI_Allreduce(
+					MPI_IN_PLACE,
+					(void *)input_tensor.tensor_data().data(),
+					(int)input_tensor.NumElements(),
+					datatype,
+					MPI_SUM,
+					MPI_COMM_WORLD);
+
+				context->set_output(i, input_tensor);
+			}
+		}
+	}
+
+private:
+	int precision_;
+	int values_input_start_index_;
+	int values_input_end_index_;
+};
+
+REGISTER_KERNEL_BUILDER(Name("TfAllreduces").Device(DEVICE_CPU), TfAllreducesOp);
+REGISTER_KERNEL_BUILDER(Name("TfAllreduces").Device(DEVICE_GPU), TfAllreducesOp);
